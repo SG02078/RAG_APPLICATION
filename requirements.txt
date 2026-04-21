@@ -1,0 +1,10 @@
+streamlit>=1.50,<2
+langchain>=1.2,<2
+langchain-community>=0.4.1,<0.5
+langchain-text-splitters>=1.1,<2
+langchain-openai>=1.1.13,<2
+pinecone>=7,<8
+pypdf>=6,<7
+docx2txt==0.8
+unstructured[pptx]>=0.18,<0.19
+python-dotenv>=1.1,<2
