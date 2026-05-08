@@ -34,6 +34,7 @@ EMBEDDING_MODEL = os.getenv("PINECONE_EMBEDDING_MODEL", "llama-text-embed-v2")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 EMBEDDING_DIMENSION = int(os.getenv("PINECONE_DIMENSION", "1024"))
+DEFAULT_RETRIEVAL_K = 12
 
 
 st.set_page_config(page_title="Sales Knowledge RAG", page_icon="chat", layout="wide")
@@ -186,7 +187,8 @@ def split_documents(documents: Iterable[Document]) -> List[Document]:
         chunk_overlap=180,
         separators=["\n\n", "\n", ".", " ", ""],
     )
-    return splitter.split_documents(list(documents))
+    chunks = splitter.split_documents(list(documents))
+    return [chunk for chunk in chunks if chunk.page_content.strip()]
 
 
 def get_pinecone_index():
@@ -232,32 +234,60 @@ def add_documents_to_namespace(uploaded_files, department: str) -> int:
     return len(chunks)
 
 
+def expand_retrieval_queries(question: str) -> List[str]:
+    normalized_question = " ".join(question.replace(",", " ").split())
+    queries = [question]
+    if normalized_question != question:
+        queries.append(normalized_question)
+
+    economic_terms = {
+        "economy",
+        "economic",
+        "growth",
+        "gdp",
+        "manufacture",
+        "manufacturing",
+        "industry",
+        "industrial",
+    }
+    if any(term in normalized_question.lower() for term in economic_terms):
+        queries.append(
+            f"{normalized_question} US GDP growth manufacturing industrial production economy outlook"
+        )
+
+    return list(dict.fromkeys(queries))
+
+
 def retrieve_documents(question: str, departments: List[str]) -> List[Document]:
     namespaces = [normalize_namespace(dept) for dept in departments]
-    query_embedding = embed_texts([question], input_type="query")[0]
+    retrieval_queries = expand_retrieval_queries(question)
+    query_embeddings = embed_texts(retrieval_queries, input_type="query")
     index = get_pinecone_index()
-    top_k = int(os.getenv("RETRIEVAL_K", "5"))
+    top_k = int(os.getenv("RETRIEVAL_K", str(DEFAULT_RETRIEVAL_K)))
     docs = []
     seen = set()
 
     for namespace in namespaces:
-        results = index.query(
-            vector=query_embedding,
-            top_k=top_k,
-            namespace=namespace,
-            include_metadata=True,
-        )
-        for match in results.get("matches", []):
-            metadata = dict(match.get("metadata") or {})
-            text = metadata.pop("text", "")
-            key = (
-                metadata.get("source"),
-                metadata.get("page"),
-                text[:120],
+        for query_embedding in query_embeddings:
+            results = index.query(
+                vector=query_embedding,
+                top_k=top_k,
+                namespace=namespace,
+                include_metadata=True,
             )
-            if key not in seen:
-                seen.add(key)
-                docs.append(Document(page_content=text, metadata=metadata))
+            for match in results.get("matches", []):
+                metadata = dict(match.get("metadata") or {})
+                text = metadata.pop("text", "").strip()
+                if not text:
+                    continue
+                key = (
+                    metadata.get("source"),
+                    metadata.get("page"),
+                    text[:120],
+                )
+                if key not in seen:
+                    seen.add(key)
+                    docs.append(Document(page_content=text, metadata=metadata))
 
     return docs
 
@@ -292,8 +322,9 @@ def answer_question(question: str, departments: List[str]):
     chat_history = format_chat_history(st.session_state.get("chat_history", []))
 
     system_prompt = """You are a helpful internal sales knowledge assistant.
-Answer using only the provided departmental context. If the context is not enough,
-say what is missing and suggest which department documents may contain the answer.
+Answer using only the provided departmental context. If the context contains relevant facts,
+synthesize them directly even when the user's question is broad or informal. If the context is
+truly not enough, say what is missing and suggest which department documents may contain the answer.
 Be concise, practical, and sales-friendly."""
     user_prompt = f"""Conversation history:
 {chat_history}
