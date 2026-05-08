@@ -20,6 +20,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import ChatOpenAI
 from pinecone import Pinecone
+from pypdf.errors import DependencyError as PdfDependencyError
+from pypdf.errors import PdfReadError
 from dotenv import load_dotenv
 
 
@@ -389,8 +391,17 @@ def render_sidebar():
 
         if st.button("Index documents", type="primary", disabled=not uploaded_files):
             with st.spinner(f"Indexing into `{normalize_namespace(selected_department)}`..."):
-                chunk_count = add_documents_to_namespace(uploaded_files, selected_department)
-            st.success(f"Indexed {chunk_count} chunks in `{normalize_namespace(selected_department)}`.")
+                try:
+                    chunk_count = add_documents_to_namespace(uploaded_files, selected_department)
+                except PdfDependencyError:
+                    st.error(
+                        "This PDF uses AES encryption and needs the `cryptography` package. "
+                        "Redeploy after installing the updated requirements, then upload it again."
+                    )
+                except PdfReadError as exc:
+                    st.error(f"Could not read one of the uploaded PDFs: {exc}")
+                else:
+                    st.success(f"Indexed {chunk_count} chunks in `{normalize_namespace(selected_department)}`.")
 
         st.divider()
         st.caption("Set these in Railway variables: OPENROUTER_API_KEY, PINECONE_API_KEY, PINECONE_INDEX_NAME, GMAIL_ID, GMAIL_PASSWORD.")
