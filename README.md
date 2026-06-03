@@ -122,3 +122,162 @@ What discounting rules should I follow for enterprise prospects?
 How should I position the new Q3 campaign to healthcare leads?
 What reimbursement policy applies to client travel?
 ```
+### application flow
+
+Sure. In 
+app.py
+, the RAG pipeline is mainly these sections:
+
+1. Loading Documents
+
+Document loading happens in:
+
+
+load_documents (line 157)
+
+def load_documents(path: Path, original_name: str, department: str) -> List[Document]:
+This checks the uploaded file extension and chooses the correct LangChain loader:
+
+.pdf -> PyPDFLoader
+.docx -> Docx2txtLoader
+.txt / .md -> TextLoader
+.csv -> CSVLoader
+.pptx -> UnstructuredPowerPointLoader
+Then it attaches metadata like:
+
+department
+source
+namespace
+So every loaded document knows where it came from.
+
+2. Chunking
+
+Chunking happens in:
+
+
+split_documents (line 181)
+
+def split_documents(documents: Iterable[Document]) -> List[Document]:
+It uses:
+
+RecursiveCharacterTextSplitter(
+    chunk_size=1200,
+    chunk_overlap=180,
+)
+That means the app breaks long documents into chunks of about 1200 characters, with 180 characters repeated between neighboring chunks. The overlap helps avoid losing context between chunks.
+
+3. Embedding
+
+Embedding happens in:
+
+
+embed_texts (line 97)
+
+def embed_texts(texts: List[str], input_type: str) -> List[List[float]]:
+This sends text to Pinecone Inference:
+
+pc.inference.embed(
+    model=EMBEDDING_MODEL,
+    inputs=batch,
+    parameters={
+        "input_type": input_type,
+        "truncate": "END",
+    },
+)
+For document chunks, the app calls it with:
+
+input_type="passage"
+For user questions, it calls it with:
+
+input_type="query"
+4. Upload + Store In Pinecone
+
+The full indexing flow is here:
+
+
+add_documents_to_namespace (line 199)
+
+def add_documents_to_namespace(uploaded_files, department: str) -> int:
+This function does the full ingestion pipeline:
+
+load documents
+-> split into chunks
+-> embed chunks
+-> create Pinecone vectors
+-> upsert into namespace
+The vectors stored in Pinecone contain:
+
+{
+    "id": str(uuid.uuid4()),
+    "values": embedding,
+    "metadata": metadata,
+}
+The actual chunk text is stored inside metadata:
+
+metadata["text"] = chunk.page_content
+5. Retrieval
+
+Retrieval starts here:
+
+
+retrieve_documents (line 259)
+
+def retrieve_documents(question: str, departments: List[str]) -> List[Document]:
+It does this:
+
+question -> embed as query -> search Pinecone namespaces -> return matching chunks
+The app searches only the departments selected in the UI:
+
+namespaces = [normalize_namespace(dept) for dept in departments]
+Then it queries Pinecone:
+
+index.query(
+    vector=query_embedding,
+    top_k=top_k,
+    namespace=namespace,
+    include_metadata=True,
+)
+It pulls the stored chunk text back from metadata:
+
+text = metadata.pop("text", "").strip()
+6. Passing Retrieved Context To The LLM
+
+This happens in:
+
+
+answer_question (line 317)
+
+def answer_question(question: str, departments: List[str]):
+It calls:
+
+source_docs = retrieve_documents(question, departments)
+context = format_context(source_docs)
+Then sends the retrieved chunks to the LLM inside the prompt:
+
+Departmental context:
+{context or "No relevant context was found."}
+
+Question:
+{question}
+So the high-level flow is:
+
+Upload file
+  -> load_documents()
+  -> split_documents()
+  -> embed_texts(..., input_type="passage")
+  -> Pinecone upsert
+
+Ask question
+  -> embed_texts(..., input_type="query")
+  -> retrieve_documents()
+  -> format_context()
+  -> answer_question()
+  -> LLM response
+
+## Simple LLM Demo
+
+Run this minimal app when you only want the `hi` -> `hello` behavior:
+
+```powershell
+streamlit run simple_llm_app.py
+```
