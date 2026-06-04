@@ -234,6 +234,47 @@ def add_documents_to_namespace(uploaded_files, department: str) -> int:
     return len(chunks)
 
 
+def add_text_to_namespace(text: str, title: str, department: str) -> int:
+    clean_text = text.strip()
+    if not clean_text:
+        return 0
+
+    source = title.strip() or "Pasted document"
+    doc = Document(
+        page_content=clean_text,
+        metadata={
+            "department": department,
+            "source": source,
+            "namespace": normalize_namespace(department),
+        },
+    )
+
+    chunks = split_documents([doc])
+    if not chunks:
+        return 0
+
+    embeddings = embed_texts([chunk.page_content for chunk in chunks], input_type="passage")
+    vectors = []
+    for chunk, embedding in zip(chunks, embeddings):
+        metadata = dict(chunk.metadata)
+        metadata["text"] = chunk.page_content
+        vectors.append(
+            {
+                "id": str(uuid.uuid4()),
+                "values": embedding,
+                "metadata": metadata,
+            }
+        )
+
+    index = get_pinecone_index()
+    namespace = normalize_namespace(department)
+    batch_size = int(os.getenv("PINECONE_UPSERT_BATCH_SIZE", "100"))
+    for start in range(0, len(vectors), batch_size):
+        index.upsert(vectors=vectors[start : start + batch_size], namespace=namespace)
+
+    return len(chunks)
+
+
 def expand_retrieval_queries(question: str) -> List[str]:
     normalized_question = " ".join(question.replace(",", " ").split())
     queries = [question]
@@ -414,25 +455,46 @@ def render_sidebar():
             department_options.append(custom_department)
 
         selected_department = st.selectbox("Upload to department", department_options)
-        uploaded_files = st.file_uploader(
-            "Upload documents",
-            type=[ext.removeprefix(".") for ext in SUPPORTED_EXTENSIONS],
-            accept_multiple_files=True,
-        )
+        upload_tab, paste_tab = st.tabs(["Files", "Paste text"])
 
-        if st.button("Index documents", type="primary", disabled=not uploaded_files):
-            with st.spinner(f"Indexing into `{normalize_namespace(selected_department)}`..."):
-                try:
-                    chunk_count = add_documents_to_namespace(uploaded_files, selected_department)
-                except PdfDependencyError:
-                    st.error(
-                        "This PDF uses AES encryption and needs the `cryptography` package. "
-                        "Redeploy after installing the updated requirements, then upload it again."
+        with upload_tab:
+            uploaded_files = st.file_uploader(
+                "Upload documents",
+                type=[ext.removeprefix(".") for ext in SUPPORTED_EXTENSIONS],
+                accept_multiple_files=True,
+            )
+
+            if st.button("Index documents", type="primary", disabled=not uploaded_files):
+                with st.spinner(f"Indexing into `{normalize_namespace(selected_department)}`..."):
+                    try:
+                        chunk_count = add_documents_to_namespace(uploaded_files, selected_department)
+                    except PdfDependencyError:
+                        st.error(
+                            "This PDF uses AES encryption and needs the `cryptography` package. "
+                            "Redeploy after installing the updated requirements, then upload it again."
+                        )
+                    except PdfReadError as exc:
+                        st.error(f"Could not read one of the uploaded PDFs: {exc}")
+                    else:
+                        st.success(f"Indexed {chunk_count} chunks in `{normalize_namespace(selected_department)}`.")
+
+        with paste_tab:
+            pasted_title = st.text_input("Document title", placeholder="Q3 sales policy")
+            pasted_text = st.text_area("Document text", height=180)
+
+            if st.button("Index pasted text", disabled=not pasted_text.strip()):
+                with st.spinner(f"Indexing into `{normalize_namespace(selected_department)}`..."):
+                    chunk_count = add_text_to_namespace(
+                        pasted_text,
+                        pasted_title,
+                        selected_department,
                     )
-                except PdfReadError as exc:
-                    st.error(f"Could not read one of the uploaded PDFs: {exc}")
-                else:
-                    st.success(f"Indexed {chunk_count} chunks in `{normalize_namespace(selected_department)}`.")
+                st.success(f"Indexed {chunk_count} chunks in `{normalize_namespace(selected_department)}`.")
+
+        with st.expander("Upload diagnostics"):
+            st.caption(f"CORS: {st.get_option('server.enableCORS')}")
+            st.caption(f"XSRF protection: {st.get_option('server.enableXsrfProtection')}")
+            st.caption(f"Max upload size MB: {st.get_option('server.maxUploadSize')}")
 
         st.divider()
         st.caption("Set these in Railway variables: OPENROUTER_API_KEY, PINECONE_API_KEY, PINECONE_INDEX_NAME, GMAIL_ID, GMAIL_PASSWORD.")

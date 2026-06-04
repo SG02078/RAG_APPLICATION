@@ -131,6 +131,11 @@ same company laptop still gets 403 while another network works, ask IT to allow
 POST requests to the app's Streamlit upload endpoint, especially
 `/_stcore/upload_file`.
 
+As a workaround when company security blocks file uploads, use the sidebar's
+**Paste text** tab. Copy text from the document, give it a title, and click
+**Index pasted text**. This avoids Streamlit's browser upload endpoint and still
+stores the content in the selected Pinecone department namespace.
+
 ## Suggested Department Flow
 
 1. Choose a department in the sidebar.
