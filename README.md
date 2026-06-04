@@ -109,6 +109,28 @@ GMAIL_PASSWORD
 streamlit run app.py --server.port $PORT --server.address 0.0.0.0
 ```
 
+## Upload 403 Troubleshooting
+
+If document upload shows `AxiosError: Request failed with status code 403`, the
+browser-side Streamlit uploader is being rejected before the Python app receives
+the file. This commonly happens behind corporate proxies, SSO layers, or iframe
+embeds when Streamlit's upload request fails an origin/XSRF check.
+
+This repo sets the required Streamlit server options in `.streamlit/config.toml`
+and repeats them in the Railway start command:
+
+```toml
+[server]
+enableCORS = false
+enableXsrfProtection = false
+maxUploadSize = 50
+```
+
+After changing these settings, redeploy or restart the Streamlit server. If the
+same company laptop still gets 403 while another network works, ask IT to allow
+POST requests to the app's Streamlit upload endpoint, especially
+`/_stcore/upload_file`.
+
 ## Suggested Department Flow
 
 1. Choose a department in the sidebar.
