@@ -521,7 +521,7 @@ def render_chat(department_options):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    prompt = st.chat_input("Ask a sales question...")
+    prompt = st.chat_input("Ask a question...")
     if not prompt:
         render_email_form()
         return
